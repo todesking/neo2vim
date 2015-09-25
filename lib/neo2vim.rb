@@ -18,7 +18,7 @@ class Neo2Vim
 
     def neovim_annotation line
         # Supported pattern: @neovim.{type}({name}, attr1 = value1, attr2 = value2, ...)
-        if line =~ /^\s*@neovim\.(\w+)\(((?:'\w+')|(?:"\w+"))(.+)/
+        if line =~ /^\s*@neovim\.(\w+)\(((?:'[^']+')|(?:"[^"]+"))(.+)/
             basic = {type: $1, name: $2[1..-2]}
             args = $3.scan(/\s*,\s*(\w+)\s*=\s*((?:'[^']*')|(?:"[^"]*"))/).map {|name, value|
               [name.to_sym, value[1..-2]]
@@ -74,14 +74,11 @@ class Neo2Vim
             # TODO: deal with multi-line string literal
             @in_plugin_class = false
           end
-          if @in_plugin_class && line =~ /^\s*def\s/ && method_name(line) !~ /^__/
-            @stores["autoload_function"][method_name(line)] = method_info(line)
-          end
         end
         @annotation = nil
     end
     def initialize source, destination
-        @names = ["autoload_function", "function", "command", "autocmd"]
+        @names = ["function", "command", "autocmd"]
         @stores = @names.map {|name| [name, {}]}.to_h
         @annotation = nil
         @plugin_class_name = nil
@@ -91,7 +88,7 @@ class Neo2Vim
         run source, destination
     end
     def write_declarations contents
-        ["autoload_function", "function", "autocmd", "command"].each do |what|
+        ["function", "autocmd", "command"].each do |what|
             @stores[what].each do |k, v|
                 contents.autoload.puts <<-EOS
 function! #{@plugin_id}\##{k}(#{v[:args].join(", ")}) abort
@@ -130,6 +127,7 @@ augroup #{@plugin_id}
         contents.plugin.puts
 
         @stores["function"].each do |k, v|
+            next if v[:annotation][:name] == "#{@plugin_id}\##{k}"
             contents.plugin.puts <<-EOS
 function! #{v[:annotation][:name]}(#{v[:args].join(", ")}) abort
     return #{@plugin_id}##{k}(#{v[:args].map{|a| "a:" + a}.join(", ")})
