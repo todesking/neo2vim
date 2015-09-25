@@ -60,7 +60,7 @@ class Neo2Vim
             @plugin_id = to_snake(@plugin_class_name)
             @state = :normal
         when :plugin_method_definition
-            if @annotation && @names.include?(@annotation[:type])
+            if @annotation
                 @stores[@annotation[:type]][method_name(line)] = method_info(line, @annotation)
             end
             @state = :normal
@@ -76,8 +76,7 @@ class Neo2Vim
         @annotation = nil
     end
     def initialize source, destination
-        @names = ["autoload_function", "function", "command", "autocmd"]
-        @stores = @names.map {|name| [name, {}]}.to_h
+        @stores = Hash.new {|h, k| h[k] = {} }
         @annotation = nil
         @plugin_class_name = nil
         @in_plugin_class = false
@@ -86,7 +85,7 @@ class Neo2Vim
         run source, destination
     end
     def write_declarations contents
-        ["autoload_function", "function", "autocmd", "command"].each do |what|
+        @stores.keys.sort.each do |what|
             @stores[what].each do |k, v|
                 contents.autoload.puts <<-EOS
 function! #{@plugin_id}\##{k}(#{v[:args].join(", ")}) abort
@@ -170,26 +169,33 @@ endif
         write_declarations(contents)
 
         contents.autoload.puts <<-EOS
-function! s:call_plugin(method_name, args) abort
-    " TODO: support nvim rpc
-    if has('nvim')
-      throw 'Call rplugin from vimscript: not supported yet'
-    endif
-    unlet! g:__error
-    python <<PY
+if has('nvim')
+    function! s:call_plugin(method_name, args) abort
+        let py = remote#host#Require('python')
+        return rpcrequest(py, '#{@plugin_id}_invoke', a:method_name, a:args)
+    endfunction
+else
+    function! s:call_plugin(method_name, args) abort
+        " TODO: support nvim rpc
+        if has('nvim')
+          throw 'Call rplugin from vimscript: not supported yet'
+        endif
+        unlet! g:__error
+        python <<PY
 try:
   r = getattr(#{@plugin_id}_plugin, vim.eval('a:method_name'))(*vim.eval('a:args'))
   vim.command('let g:__result = ' + json.dumps(([] if r == None else r)))
 except:
   vim.command('let g:__error = ' + json.dumps(str(sys.exc_info()[0]) + ':' + str(sys.exc_info()[1])))
 PY
-    if exists('g:__error')
-      throw g:__error
-    endif
-    let res = g:__result
-    unlet g:__result
-    return res
-endfunction
+        if exists('g:__error')
+          throw g:__error
+        endif
+        let res = g:__result
+        unlet g:__result
+        return res
+    endfunction
+endif
         EOS
 
         contents
